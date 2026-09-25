@@ -951,7 +951,17 @@ class TestCommandFailures:
             data = json.loads(result.output)
             assert data["ok"] is False
             assert data["error"]["code"] == "not_authenticated"
-            clear_credential.assert_called_once()
+            # An expired __zp_stoken__ must not wipe the login cookies other endpoints still accept.
+            clear_credential.assert_not_called()
+
+    def test_extraction_hint_for_macos_full_disk_access(self, monkeypatch):
+        from boss_cli.auth import _diagnose_extraction_issues
+
+        diagnostics = ["chrome[Default]: Unable to read database file"]
+        monkeypatch.setattr("boss_cli.auth.sys.platform", "darwin")
+        assert "Full Disk Access" in _diagnose_extraction_issues(diagnostics)
+        monkeypatch.setattr("boss_cli.auth.sys.platform", "linux")
+        assert _diagnose_extraction_issues(diagnostics) is None
 
     def test_export_failure_exits_nonzero(self):
         from boss_cli.exceptions import BossApiError

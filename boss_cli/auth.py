@@ -159,12 +159,26 @@ _KEYCHAIN_ERROR_KEYWORDS = (
 )
 
 
+# macOS privacy protection (TCC) denies reading another app's data without Full Disk Access.
+_FILE_ACCESS_ERROR_KEYWORDS = (
+    "unable to read database file",
+    "operation not permitted",
+)
+
+
 def _diagnose_extraction_issues(diagnostics: list[str]) -> str | None:
     """Analyse extraction diagnostics for platform-specific issues.
 
     Returns a user-friendly hint string, or None.
     """
     lowered = " ".join(diagnostics).lower()
+    if sys.platform == "darwin" and any(kw in lowered for kw in _FILE_ACCESS_ERROR_KEYWORDS):
+        return (
+            "macOS blocked access to the browser's cookie database — your terminal lacks Full Disk Access.\n"
+            "  Fix: System Settings → Privacy & Security → Full Disk Access → enable your terminal app,\n"
+            "  fully quit and reopen the terminal, then run boss login again.\n"
+            "  QR login cannot obtain __zp_stoken__, so search/recommend may still fail without this."
+        )
     if not any(kw in lowered for kw in _KEYCHAIN_ERROR_KEYWORDS):
         return None
 

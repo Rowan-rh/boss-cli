@@ -25,7 +25,7 @@ Commands with `--json` / `--yaml` print exactly one envelope to **stdout**. Rich
   "data": null,
   "error": {
     "code": "not_authenticated",
-    "message": "环境异常 (__zp_stoken__ 已过期)。请重新登录: boss logout && boss login"
+    "message": "环境异常 (__zp_stoken__ 已过期，且无法从浏览器刷新)。请在浏览器中打开 zhipin.com 确认已登录，再执行 boss login（…）"
   }
 }
 ```
@@ -36,7 +36,7 @@ Branch on `ok` and `error.code`. `error.message` is human-readable Chinese text 
 
 | Code | Description | Suggested agent action |
 |------|-------------|------------------------|
-| `not_authenticated` | Session expired or not logged in (BOSS code 37) | Ask the user to log in to zhipin.com in a browser, then `boss logout && boss login` |
+| `not_authenticated` | `__zp_stoken__` expired and could not be refreshed from the browser, or not logged in (BOSS code 37). The saved credential is kept, so endpoints that do not need `__zp_stoken__` (e.g. `boss me`) keep working | Ask the user to log in to zhipin.com in a browser, then `boss logout && boss login` |
 | `rate_limited` | Too many requests (BOSS code 9); the client already cooled down and retried once | Stop and wait several minutes; do not retry in a loop |
 | `invalid_params` | Missing or invalid parameters (BOSS code 17/19) | Fix the arguments |
 | `api_error` | Any other upstream or service error — e.g. `当前登录状态已失效 (code=7)`, security block (code 121/122), empty online resume, TypeSafe Jev failure | Show `error.message` to the user |
