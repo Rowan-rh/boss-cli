@@ -18,11 +18,12 @@ from ..resume import normalize_resume, resume_to_text
 from ._common import console, handle_command, require_auth, structured_output_options
 
 _DIMENSION_LABELS = {
+    "overall": "整体适配度",
     "skills": "技能匹配",
     "responsibilities": "职责匹配",
     "experience": "经验匹配",
-    "company_business": "公司业务相关度（0–4）",
-    "preference_alignment": "求职期望匹配（0–4）",
+    "company_business": "公司业务相关度",
+    "preference_alignment": "求职期望匹配",
 }
 
 _PROFILE_FIELD_LABELS = {
@@ -161,23 +162,22 @@ def _render_fit(data: dict[str, Any]) -> None:
     """Render a concise fit breakdown without echoing the resume text."""
     job = data["job"]
     assessment = data["assessment"]
-    table = Table(title="岗位适配度评估", show_lines=True)
+    table = Table(title="岗位适配度评估（Jev 返回的 0–4 评分，不是百分比）", show_lines=True)
     table.add_column("评估维度", style="bold")
-    table.add_column("结果")
-    table.add_column("置信度 / 说明", style="dim")
+    table.add_column("评分", justify="right")
+    table.add_column("P(0) / P(1) / P(2) / P(3) / P(4)")
+    table.add_column("Jev confidence", justify="right", style="dim")
 
-    overall = assessment["overall"]
-    table.add_row(
-        "整体适配度（0–4）",
-        f"{overall['score']:.2f} / 4",
-        _format_confidence(overall.get("confidence")),
-    )
-    probability = assessment["screening_probability"]["probability"]
-    table.add_row("简历初筛入选概率", f"{probability:.0%}", "Jev 模型概率；非公司历史录用率")
     for key, label in _DIMENSION_LABELS.items():
         answer = assessment[key]
-        result = f"{answer['score']:.2f} / 4" if "score" in answer else answer["label"]
-        table.add_row(label, result, _format_confidence(answer.get("confidence")))
+        table.add_row(
+            label,
+            f"{answer['score']:.2f}",
+            _format_distribution(answer.get("probabilities")),
+            _format_confidence(answer.get("confidence")),
+        )
+    probability = assessment["screening_probability"]["probability"]
+    table.add_row("简历初筛通过概率", f"{probability:.0%}", "Jev 模型概率；非公司历史录用率", "-")
 
     heading = Text(f"{job['title']} @ {job['company']}  ·  {job['salary']}  ·  {job['location']}")
     console.print(Panel(heading, title=Text("📋 职位")))
@@ -201,9 +201,13 @@ def _render_fit(data: dict[str, Any]) -> None:
 
 
 def _format_confidence(value: float | None) -> str:
-    if value is None:
-        return "未提供"
-    return f"{value:.0%}（不保证单次判断正确）"
+    return "-" if value is None else f"{value:.2f}"
+
+
+def _format_distribution(probabilities: dict[str, float] | None) -> str:
+    if not probabilities:
+        return "-"
+    return " / ".join(f"{probabilities.get(str(level), 0.0):.0%}" for level in range(5))
 
 
 def _read_resume_file(resume_file: str) -> str:

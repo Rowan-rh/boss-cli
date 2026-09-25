@@ -66,9 +66,9 @@ uv sync
 
 ```bash
 # ─── Auth ─────────────────────────────────────────
-boss login                             # Auto-detect browser cookies, fallback to QR
+boss login                             # Read cookies from a logged-in browser (fails with a fix hint, never auto-QR)
 boss login --cookie-source chrome      # Extract from specific browser
-boss login --qrcode                    # QR code login only
+boss login --qrcode                    # Explicit QR login (kicks the browser session, no __zp_stoken__)
 boss status                            # Check login status (validates real search session, shows cookie names)
 boss logout                            # Clear saved cookies
 
@@ -245,7 +245,7 @@ Commands with `--json` / `--yaml` print one envelope to **stdout**; all Rich tab
 boss status --json | jq -e '.authenticated' >/dev/null && echo AUTH_OK || echo AUTH_NEEDED
 ```
 
-`authenticated` reflects a live search request; `search_authenticated` / `recommend_authenticated` / `reason` diagnose partial sessions (e.g. search works but personal APIs fail). If `AUTH_NEEDED`, the user must act: log in to zhipin.com in a browser and run `boss login` (or scan the QR code). Agents cannot complete login themselves. For headless environments, `BOSS_COOKIES="k1=v1; k2=v2"` injects cookies copied from the browser (treat it as a secret).
+`authenticated` requires both a live search request and a job-detail request (the detail endpoint enforces `__zp_stoken__`); `search_authenticated` / `recommend_authenticated` / `detail_authenticated` / `reason` diagnose partial sessions (`detail_authenticated` is `null` when no recommended job was available to probe). If `AUTH_NEEDED`, the user must act: log in to zhipin.com in a browser and run `boss login` (or scan the QR code). Agents cannot complete login themselves. For headless environments, `BOSS_COOKIES="k1=v1; k2=v2"` injects cookies copied from the browser (treat it as a secret).
 
 ### Commands with side effects
 
@@ -296,7 +296,7 @@ boss-cli supports multiple authentication methods:
 2. **Browser cookies** — auto-detects installed browsers (Chrome, Firefox, Edge, Brave, Arc, Chromium, Opera, Vivaldi, Safari, LibreWolf)
 3. **QR code login** — terminal QR output using Unicode half-blocks, scan with Boss 直聘 APP
 
-`boss login` auto-extracts browser cookies first, falls back to QR login. Use `--cookie-source chrome` to specify a browser, or `--qrcode` to skip browser detection. The command now verifies the saved credential against a real authenticated API before reporting success.
+`boss login` extracts cookies from a browser where you are already logged in to zhipin.com. If that fails (e.g. missing Full Disk Access), it exits with the reason and the fix instead of silently switching to QR login — a QR login opens a new web session that logs the browser out, and it cannot obtain `__zp_stoken__`. Use `--cookie-source chrome` to specify a browser, or `--qrcode` to opt into QR login explicitly. The command now verifies the saved credential against a real authenticated API before reporting success.
 
 `boss recommend` follows the live web app's current recommendation data source and request context, which improves compatibility when the legacy recommendation endpoint is rejected.
 

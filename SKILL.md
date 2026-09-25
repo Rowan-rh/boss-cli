@@ -125,7 +125,7 @@ Payloads live under `.data`.
 | `boss fit <securityId> --resume-file <path>` | Use a local UTF-8 `.txt`/`.md` resume instead | `boss fit abc123 --resume-file resume.md --confirm-send --json` |
 | `--company-context-file <path>` | Add a company business summary when BOSS has little detail | |
 
-Requires `TYPESAFE_API_KEY` in the environment. `--confirm-send` is mandatory because the resume, profile fields and job data are sent to TypeSafe — **ask the user before passing it**. Output fields: `.data.assessment.{skills,responsibilities,experience}` (choice), `.data.assessment.{company_business,preference_alignment,overall}.score` (0–4, not a percentage), `.data.assessment.screening_probability.probability`, and `.data.input_summary` (see [SCHEMA.md](./SCHEMA.md)).
+Requires `TYPESAFE_API_KEY` in the environment. `--confirm-send` is mandatory because the resume, profile fields and job data are sent to TypeSafe — **ask the user before passing it**. Output fields: `.data.assessment.{skills,responsibilities,experience,company_business,preference_alignment,overall}.score` (0–4, not a percentage, with `probabilities` per level), `.data.assessment.screening_probability.probability`, and `.data.input_summary` (see [SCHEMA.md](./SCHEMA.md)).
 
 ### Actions (side effects — get user approval first)
 
@@ -141,9 +141,9 @@ Commands that prompt for confirmation (`batch-greet`, recruiter `reply` / `reque
 
 | Command | Description |
 |---------|-------------|
-| `boss login` | Extract cookies from browser (auto-detect, fallback QR) |
+| `boss login` | Extract cookies from a logged-in browser; on failure exits with the cause and fix (no automatic QR) |
 | `boss login --cookie-source <browser>` | Extract from specific browser |
-| `boss login --qrcode` | QR code login only (terminal QR output) |
+| `boss login --qrcode` | Explicit QR login — logs the browser session out and cannot obtain `__zp_stoken__`; only use when the user asks |
 | `boss status` | Check authentication status (shows cookie names) |
 | `boss logout` | Clear saved credentials |
 

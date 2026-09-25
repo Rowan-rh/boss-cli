@@ -21,11 +21,18 @@ from ._common import (
 logger = logging.getLogger(__name__)
 
 
+_QR_LOGIN_WARNING = (
+    "[yellow]⚠️  扫码登录会在 BOSS 新建一个网页端会话，已在浏览器中登录的 zhipin.com 可能会被挤下线；\n"
+    "   且扫码无法获取 __zp_stoken__，职位详情 / 搜索 / jEV 适配度评估可能不可用。\n"
+    "   如果浏览器已登录，请按 Ctrl+C 取消，改用 boss login 直接读取浏览器 Cookie。[/yellow]\n"
+)
+
+
 @click.command()
-@click.option("--qrcode", is_flag=True, help="使用二维码扫码登录")
+@click.option("--qrcode", is_flag=True, help="改用二维码扫码登录（会挤掉浏览器端登录，且拿不到 __zp_stoken__）")
 @click.option("--cookie-source", default=None, help="指定浏览器 (chrome/firefox/edge/brave/arc/safari等)")
 def login(qrcode: bool, cookie_source: str | None) -> None:
-    """扫码登录 Boss 直聘 APP"""
+    """读取浏览器中已登录的 BOSS 直聘 Cookie（需先在浏览器登录 zhipin.com）"""
     from ..auth import clear_credential, verify_credential
 
     def _finalize_login(cred, *, from_qr: bool = False) -> None:
@@ -38,7 +45,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
                 console.print(f"[green]✅ 登录成功！[/green] ({len(cred.cookies)} cookies)")
                 console.print(
                     "[yellow]⚠️  __zp_stoken__ 缺失（该 cookie 由浏览器 JS 生成，QR 登录无法获取）。\n"
-                    "   部分接口可能返回「环境异常」，建议用浏览器登录后再执行 boss login 补全。[/yellow]"
+                    "   职位详情等接口会返回「环境异常」，建议用浏览器登录后再执行 boss login 补全。[/yellow]"
                 )
                 return
 
@@ -49,16 +56,16 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
         clear_credential()
         console.print("[red]❌ 登录失败：凭证未通过实际接口校验[/red]")
         if message:
-            console.print(f"[dim]{message}[/dim]")
+            console.print(f"[dim]{escape(message)}[/dim]")
         if not from_qr:
             console.print(
-                "\n[yellow]💡 提示：浏览器运行时 Cookie 可能未写入磁盘，建议：\n"
-                "   1. 关闭浏览器后重试 boss login\n"
-                "   2. 或使用 boss login --qrcode 扫码登录[/yellow]"
+                "\n[yellow]💡 请在浏览器中重新登录 zhipin.com，打开任意职位详情页确认可正常访问，\n"
+                "   然后关闭浏览器再执行 boss login（运行中的浏览器可能尚未把最新 Cookie 写入磁盘）。[/yellow]"
             )
         raise SystemExit(1)
 
     if qrcode:
+        console.print(_QR_LOGIN_WARNING)
         # Prefer browser-assisted login (captures __zp_stoken__ via JS)
         # Fallback to HTTP-only QR flow when camoufox is unavailable
         try:
@@ -69,7 +76,7 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
                 return
             except BrowserLoginUnavailable as e:
                 console.print(
-                    f"[yellow]⚠️  浏览器辅助登录不可用: {e}\n"
+                    f"[yellow]⚠️  浏览器辅助登录不可用: {escape(str(e))}\n"
                     "   安装方式: pip install 'kabi-boss-cli[browser]' && python -m camoufox fetch\n"
                     "   回退到 HTTP 扫码登录...[/yellow]\n"
                 )
@@ -82,46 +89,28 @@ def login(qrcode: bool, cookie_source: str | None) -> None:
         try:
             cred = asyncio.run(qr_login())
         except RuntimeError as e:
-            console.print(f"[red]❌ {e}[/red]")
+            console.print(f"[red]❌ {escape(str(e))}[/red]")
             raise SystemExit(1) from None
         _finalize_login(cred, from_qr=True)
-    else:
-        from ..auth import extract_browser_credential, _diagnose_extraction_issues
-        # Try browser cookies first
-        cred, diagnostics = extract_browser_credential(cookie_source=cookie_source)
-        if cred:
-            _finalize_login(cred)
-        else:
-            # Show diagnostics hint if available
-            hint = _diagnose_extraction_issues(diagnostics)
-            if hint:
-                console.print("[yellow]⚠️  Cookie 提取诊断:[/yellow]")
-                for line in hint.splitlines():
-                    console.print(f"  [dim]{line}[/dim]")
-                console.print()
+        return
 
-            # Fallback to QR login
-            console.print("[yellow]未找到浏览器 Cookie，尝试二维码登录...[/yellow]")
-            console.print("[dim]💡 也可以手动设置 BOSS_COOKIES 环境变量来注入 cookie[/dim]")
-            try:
-                from ..browser_login import browser_qr_login, BrowserLoginUnavailable
-                try:
-                    cred = browser_qr_login()
-                    _finalize_login(cred, from_qr=True)
-                    return
-                except BrowserLoginUnavailable:
-                    pass
-            except ImportError:
-                pass
+    from ..auth import browser_extraction_failure_reason, extract_browser_credential
+    cred, diagnostics = extract_browser_credential(cookie_source=cookie_source)
+    if cred:
+        _finalize_login(cred)
+        return
 
-            from ..auth import qr_login
-            import asyncio
-            try:
-                cred = asyncio.run(qr_login())
-            except RuntimeError as e:
-                console.print(f"[red]❌ {e}[/red]")
-                raise SystemExit(1) from None
-            _finalize_login(cred, from_qr=True)
+    # Never fall back to QR silently: a QR login kicks the browser session offline and still
+    # lacks __zp_stoken__, so the user must fix the browser read (or opt into --qrcode).
+    source = f"（{escape(cookie_source)}）" if cookie_source else ""
+    console.print(f"[red]❌ 登录失败：未能从浏览器{source}读取到可用的 BOSS 登录 Cookie[/red]")
+    for line in browser_extraction_failure_reason(diagnostics).splitlines():
+        console.print(f"  [yellow]{escape(line)}[/yellow]")
+    console.print(
+        "\n[dim]处理完成后重新执行 boss login。也可以设置 BOSS_COOKIES 环境变量手动注入 Cookie，"
+        "或使用 boss login --qrcode 扫码（会挤掉浏览器端登录，且无法获取 __zp_stoken__）。[/dim]"
+    )
+    raise SystemExit(1)
 
 
 @click.command()
@@ -169,12 +158,13 @@ def status(as_json: bool, as_yaml: bool) -> None:
                 console.print(f"  [dim]{keys}{extra}[/dim]")
             console.print(
                 "  [dim]"
-                f"search={'ok' if health['search_authenticated'] else 'fail'} · "
-                f"recommend={'ok' if health['recommend_authenticated'] else 'fail'}"
+                f"search={_check_label(health['search_authenticated'])} · "
+                f"recommend={_check_label(health['recommend_authenticated'])} · "
+                f"detail={_check_label(health.get('detail_authenticated'))}"
                 "[/dim]"
             )
             if message:
-                console.print(f"  [dim]{message}[/dim]")
+                console.print(f"  [dim]{escape(message)}[/dim]")
     else:
         if as_json:
             click.echo(json.dumps({"authenticated": False, "credential_present": False}))
@@ -186,7 +176,13 @@ def status(as_json: bool, as_yaml: bool) -> None:
             except ImportError:
                 click.echo(json.dumps(data, indent=2, ensure_ascii=False))
         else:
-            console.print("[yellow]⚠️  未登录[/yellow]，使用 [bold]boss login[/bold] 扫码登录")
+            console.print("[yellow]⚠️  未登录[/yellow]，请先在浏览器登录 zhipin.com，再执行 [bold]boss login[/bold]")
+
+
+def _check_label(value: bool | None) -> str:
+    if value is None:
+        return "skipped"
+    return "ok" if value else "fail"
 
 
 @click.command()
