@@ -65,7 +65,7 @@ An agent should treat "exit ≠ 0 and empty stdout" as a local precondition fail
 
 | Command | Output |
 |---------|--------|
-| `boss status --json` | Bare object, no envelope: `{"authenticated", "credential_present", "cookie_count", "cookies", "search_authenticated", "recommend_authenticated", "reason"}` (only `authenticated` and `credential_present` when no credential exists). `cookies` lists names only, never values. |
+| `boss status --json` | Bare object, no envelope: `{"authenticated", "credential_present", "cookie_count", "cookies", "search_authenticated", "recommend_authenticated", "detail_authenticated", "reason"}`. `authenticated` requires search and job detail to pass; `detail_authenticated` is `null` when no recommended job was available to probe (only `authenticated` and `credential_present` when no credential exists). `cookies` lists names only, never values. |
 | `boss export` | CSV or JSON rows written to `-o` or stdout (`--format csv\|json`) |
 | `boss recruiter export`, `boss recruiter resume-download` | Files written to disk |
 | `boss login`, `boss logout`, `boss cities`, `boss batch-greet`, `boss recruiter batch-view`, `boss recruiter job-close`, `boss recruiter job-reopen` | Rich output only |
@@ -102,9 +102,9 @@ Empty fields and empty sections are omitted. `boss me --basic --json` returns on
   "job": { "security_id": "…", "title": "…", "company": "…", "salary": "…", "location": "…", "business_context_source": "…" },
   "model": "jev-latest",
   "assessment": {
-    "skills":           { "choice": "partial_match", "label": "部分匹配", "confidence": 0.7, "probabilities": { … } },
-    "responsibilities": { "choice": "…", "label": "…", "confidence": 0.0, "probabilities": { … } },
-    "experience":       { "choice": "…", "label": "…", "confidence": 0.0, "probabilities": { … } },
+    "skills":               { "score": 3.0, "scale": "0–4（模型评分，不是百分比）", "confidence": 0.5, "probabilities": { "0": 0.0, "1": 0.0, "2": 0.2, "3": 0.6, "4": 0.2 } },
+    "responsibilities":     { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
+    "experience":           { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
     "company_business":     { "score": 2.6, "scale": "0–4（模型评分，不是百分比）", "confidence": 0.5, "probabilities": { … } },
     "preference_alignment": { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
     "overall":              { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
@@ -120,7 +120,6 @@ Empty fields and empty sections are omitted. `boss me --basic --json` returns on
 }
 ```
 
-- `choice` ∈ `strong_match`, `partial_match`, `clear_gap`, `insufficient_evidence`.
-- Scores are 0–4, not percentages. `confidence` and `probabilities` may be `null`.
+- All six dimensions are Jev 0–4 scores (not percentages); `probabilities` maps each level `"0"`–`"4"` to its probability. `confidence` and `probabilities` may be `null`.
 - `resume_source` is `boss_online_resume` (default) or `file` (`--resume-file`).
 - The resume text itself is never echoed in the output.
