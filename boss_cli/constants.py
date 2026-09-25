@@ -14,6 +14,7 @@ WEB_GEEK_JOB_URL = f"{WEB_GEEK_BASE_URL}/job"
 WEB_GEEK_RECOMMEND_URL = f"{WEB_GEEK_BASE_URL}/recommend"
 WEB_GEEK_CHAT_URL = f"{WEB_GEEK_BASE_URL}/chat"
 WEB_GEEK_HISTORY_URL = f"{WEB_GEEK_BASE_URL}/history"
+WEB_GEEK_RESUME_URL = f"{WEB_GEEK_BASE_URL}/resume"
 
 # ── QR Login API ────────────────────────────────────────────────────
 QR_RANDKEY_URL = "/wapi/zppassport/captcha/randkey"
@@ -33,6 +34,7 @@ USER_INFO_URL = "/wapi/zpuser/wap/getUserInfo.json"
 RESUME_BASEINFO_URL = "/wapi/zpgeek/resume/baseinfo/query.json"
 RESUME_EXPECT_URL = "/wapi/zpgeek/resume/expect/query.json"
 RESUME_STATUS_URL = "/wapi/zpgeek/resume/status.json"
+RESUME_PREVIEW_URL = "/wapi/zpgeek/resume/geek/preview/data.json"
 DELIVER_LIST_URL = "/wapi/zprelation/resume/geekDeliverList"
 INTERVIEW_DATA_URL = "/wapi/zpinterview/geek/interview/data.json"
 

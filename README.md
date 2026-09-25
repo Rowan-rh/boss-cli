@@ -23,8 +23,9 @@ A CLI for BOSS 直聘 — search jobs, view recommendations, manage applications
 - 🔍 **Search** — jobs by keyword with city/salary/experience/degree/industry/scale/stage/job-type filters
 - ⭐ **Recommendations** — personalized job recommendations based on profile
 - 📋 **Detail & Export** — view full job details, short-index navigation (`boss show 3`), CSV/JSON export
+- 🎯 **Job Fit** — optional TypeSafe Jev assessment of a local resume against a BOSS job posting
 - 📜 **History** — browse job viewing history
-- 👤 **Profile** — view personal info, resume status
+- 👤 **Profile** — view personal info and full online resume (work/project/education experience, expectations)
 - 📮 **Applications** — view applied jobs list
 - 📋 **Interviews** — view interview invitations
 - 💬 **Chat** — view communicated boss list
@@ -90,13 +91,19 @@ boss detail <securityId> --json        # JSON output (with schema envelope)
 boss export "Python" -n 50 -o jobs.csv # Export search results to CSV
 boss export "golang" --format json -o jobs.json  # Export as JSON
 
+# ─── Job Fit (opt-in TypeSafe Jev assessment) ──────
+export TYPESAFE_API_KEY="your-api-key"  # Required; keep this secret
+boss fit <securityId> --confirm-send --json  # Uses your BOSS online resume
+boss fit <securityId> --resume-file ~/resume.txt --confirm-send --json
+
 # ─── Recommendations ──────────────────────────────
 boss recommend                         # View recommended jobs
 boss recommend -p 2 --json             # Next page, JSON output
 
 # ─── Personal Center ─────────────────────────────
-boss me                                # View profile
-boss me --json                         # JSON output
+boss me                                # View profile + full online resume
+boss me --basic                        # Basic info only
+boss me --json                         # JSON output (online resume under data.resume)
 boss applied                           # View applied jobs
 boss interviews                        # View interview invitations
 boss history                           # View browsing history
@@ -113,6 +120,17 @@ boss cities                            # List supported cities
 boss --version                         # Show version
 boss -v search "Python"                # Verbose logging (request timing)
 ```
+
+### Job Fit Assessment
+
+`boss fit` evaluates one job at a time. By default it uses your BOSS online resume (the same data as `boss me`, without name, contact, age, or gender); pass `--resume-file` to use a UTF-8 `.txt` or `.md` resume instead. It fetches the full job description and job-relevant profile fields (education, work experience, and stated job preferences) from BOSS, then sends them to TypeSafe Jev. The required `--confirm-send` flag makes this external transfer explicit. Name, phone, gender, and age are excluded from the BOSS profile fields. Before sending, emails, mainland phone numbers, ID numbers, and labelled WeChat/QQ IDs are stripped from the resume text and the number of removals is reported; this is pattern-based, so still remove your name, address, and other personal data from the file yourself. Profile fields that could not be read from BOSS are listed in the output (`input_summary.profile_fields_missing`), and the preference score only reflects the fields that were found.
+
+```bash
+export TYPESAFE_API_KEY="your-api-key"
+boss fit <securityId> --resume-file ~/resume.txt --company-context-file ~/company.txt --confirm-send
+```
+
+The company assessment uses BOSS company metadata and any business description present in the job details. Jev does not browse company websites, so pass `--company-context-file` with a company business summary when BOSS does not provide enough detail. The output includes skill, responsibility, experience, company-business, preference, and overall fit dimensions, plus a Jev estimate of resume-screening probability. `TYPESAFE_BASE_URL` (HTTPS origin only, no path) and `TYPESAFE_MODEL` can override the API host and model; defaults are `https://api.typesafe.ai` and `jev-latest`. HTTP 429/529 responses are retried once. Resume plus company context is capped at 40 KB. The 0–4 scores are not percentages. Jev's screening probability is not a company-specific historical hiring rate or a final-offer probability; review the resume and job requirements yourself. This command does not apply to the job or contact the recruiter.
 
 ## Recruiter Mode (雇主端)
 
@@ -319,8 +337,9 @@ Check your city filter. Some keywords are city-specific. Use `boss cities` to se
 - 🔍 **搜索** — 按关键词搜索职位，支持城市/薪资/经验/学历/行业/规模/融资阶段/职位类型筛选
 - ⭐ **推荐** — 基于求职期望的个性化推荐
 - 📋 **详情 & 导出** — 职位详情，编号导航 (`boss show 3`)，CSV/JSON 导出
+- 🎯 **岗位适配** — 使用 TypeSafe Jev 对本地简历文本和职位要求做可选的结构化评估
 - 📜 **历史** — 查看浏览历史
-- 👤 **个人** — 查看个人资料
+- 👤 **个人** — 查看个人资料和完整在线简历（工作/项目/教育经历、求职期望）
 - 📮 **投递** — 查看已投递职位列表
 - 📋 **面试** — 查看面试邀请
 - 💬 **沟通** — 查看沟通过的 Boss 列表
@@ -346,12 +365,21 @@ boss show 3                            # 按编号查看详情
 boss detail <securityId> --json        # 指定 ID 查看（JSON envelope）
 boss export "Python" -n 50 -o jobs.csv # 导出 CSV
 
+# 岗位适配评估（需要 TypeSafe API Key，并显式确认外发简历）
+export TYPESAFE_API_KEY="your-api-key"
+boss fit <securityId> --confirm-send --json                        # 默认使用 BOSS 在线简历
+boss fit <securityId> --resume-file ~/resume.txt --confirm-send --json  # 或使用本地简历文件
+# 公司详情不足时可补充：--company-context-file ~/company.txt
+# 外发前会自动移除简历中的邮箱/手机号/证件号/微信 QQ 号，姓名和住址请自行删除
+
 # 推荐 & 历史
 boss recommend                         # 个性化推荐
 boss history                           # 浏览历史
 
 # 个人中心
-boss me --json                         # 个人资料（JSON）
+boss me                                # 个人资料 + 完整在线简历
+boss me --basic                        # 仅基本信息
+boss me --json                         # 个人资料（JSON，在线简历位于 data.resume）
 boss applied                           # 已投递
 boss interviews                        # 面试邀请
 boss chat                              # 沟通列表

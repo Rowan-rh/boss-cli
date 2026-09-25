@@ -47,6 +47,7 @@ from .constants import (
     JOB_SEARCH_URL,
     RESUME_BASEINFO_URL,
     RESUME_EXPECT_URL,
+    RESUME_PREVIEW_URL,
     RESUME_STATUS_URL,
     USER_INFO_URL,
     WEB_BOSS_CHAT_URL,
@@ -54,6 +55,7 @@ from .constants import (
     WEB_GEEK_HISTORY_URL,
     WEB_GEEK_JOB_URL,
     WEB_GEEK_RECOMMEND_URL,
+    WEB_GEEK_RESUME_URL,
 )
 from .exceptions import BossApiError, ParamError, RateLimitError, SessionExpiredError
 
@@ -196,6 +198,8 @@ class BossClient:
             headers["Referer"] = WEB_GEEK_JOB_URL
         elif url == JOB_HISTORY_URL:
             headers["Referer"] = WEB_GEEK_HISTORY_URL
+        elif url == RESUME_PREVIEW_URL:
+            headers["Referer"] = WEB_GEEK_RESUME_URL
         elif url in (FRIEND_LIST_URL, FRIEND_ADD_URL):
             headers["Referer"] = WEB_GEEK_CHAT_URL
         # Recruiter (boss) endpoints
@@ -420,6 +424,10 @@ class BossClient:
     def get_resume_expect(self) -> dict[str, Any]:
         """Get job expectations (desired position, salary, city)."""
         return self._get(RESUME_EXPECT_URL, action="求职期望")
+
+    def get_resume_detail(self) -> dict[str, Any]:
+        """Get the full online resume (work/project/education experience, advantage, expectations)."""
+        return self._get(RESUME_PREVIEW_URL, params={"_": int(time.time() * 1000)}, action="在线简历")
 
     def get_resume_status(self) -> dict[str, Any]:
         """Get resume status."""
