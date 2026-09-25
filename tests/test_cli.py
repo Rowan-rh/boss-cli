@@ -672,6 +672,77 @@ class TestAuthHealthVerification:
         assert calls["count"] == 4
 
 
+    def test_verify_credential_fails_when_job_detail_rejects_stoken(self, monkeypatch):
+        from boss_cli.auth import Credential, _AUTH_HEALTH_CACHE, verify_credential_details
+        from boss_cli.exceptions import SessionExpiredError
+
+        class FakeClient:
+            def __init__(self, credential, request_delay=0.2):
+                pass
+
+            def __enter__(self):
+                return self
+
+            def __exit__(self, exc_type, exc, tb):
+                return False
+
+            def search_jobs(self, **kwargs):
+                return {"jobList": []}
+
+            def get_recommend_jobs(self, page=1):
+                return {"jobList": [{"securityId": "sid-1"}]}
+
+            def get_job_detail(self, security_id, lid=""):
+                assert security_id == "sid-1"
+                raise SessionExpiredError()
+
+        _AUTH_HEALTH_CACHE.clear()
+        monkeypatch.setattr("boss_cli.client.BossClient", FakeClient)
+
+        cred = Credential(cookies={"__zp_stoken__": "s", "wt2": "1", "wbg": "2", "zp_at": "3"})
+        result = verify_credential_details(cred)
+
+        # search/recommend pass but detail enforces __zp_stoken__: must not report as logged in.
+        assert result["search_authenticated"] is True
+        assert result["detail_authenticated"] is False
+        assert result["authenticated"] is False
+        assert "detail:" in result["reason"]
+
+
+class TestLoginFlow:
+    """boss login must not silently switch to QR login."""
+
+    def test_browser_extraction_failure_exits_without_qr(self, monkeypatch):
+        diagnostics = ["chrome[Default]: Unable to read database file"]
+        monkeypatch.setattr("boss_cli.auth.sys.platform", "darwin")
+        with patch("boss_cli.auth.extract_browser_credential", return_value=(None, diagnostics)), \
+             patch("boss_cli.auth.qr_login") as qr_login, \
+             patch("boss_cli.browser_login.browser_qr_login") as browser_qr_login:
+            result = runner.invoke(cli, ["login", "--cookie-source", "chrome"])
+
+        assert result.exit_code == 1
+        assert "Full Disk Access" in result.output
+        assert "--qrcode" in result.output
+        qr_login.assert_not_called()
+        browser_qr_login.assert_not_called()
+
+    def test_incomplete_browser_cookies_explain_relogin(self):
+        from boss_cli.auth import browser_extraction_failure_reason
+
+        reason = browser_extraction_failure_reason(["in-process: missing required cookies: __zp_stoken__"])
+        assert "重新登录" in reason
+
+    def test_qrcode_warns_before_kicking_browser_session(self):
+        from boss_cli.auth import Credential
+
+        cred = Credential(cookies={"wt2": "1", "wbg": "2", "zp_at": "3"})
+        with patch("boss_cli.browser_login.browser_qr_login", return_value=cred):
+            result = runner.invoke(cli, ["login", "--qrcode"])
+
+        assert result.exit_code == 0
+        assert "挤下线" in result.output
+
+
 # ── Index Cache ─────────────────────────────────────────────────────
 
 
@@ -954,6 +1025,28 @@ class TestCommandFailures:
             # An expired __zp_stoken__ must not wipe the login cookies other endpoints still accept.
             clear_credential.assert_not_called()
 
+    def test_session_expired_includes_browser_refresh_failure_reason(self, monkeypatch):
+        from boss_cli.exceptions import SessionExpiredError
+
+        mock_cred = MagicMock()
+        diagnostics = ["chrome[Default]: Operation not permitted"]
+        monkeypatch.setattr("boss_cli.auth.sys.platform", "darwin")
+        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
+             patch("boss_cli.commands._common.BossClient") as MockClient, \
+             patch("boss_cli.auth.extract_browser_credential", return_value=(None, diagnostics)):
+            mock_instance = MagicMock()
+            mock_instance.search_jobs.side_effect = SessionExpiredError()
+            mock_instance.__enter__ = MagicMock(return_value=mock_instance)
+            mock_instance.__exit__ = MagicMock(return_value=False)
+            MockClient.return_value = mock_instance
+
+            result = runner.invoke(cli, ["search", "golang", "--json"])
+
+        assert result.exit_code == 1
+        data = json.loads(result.output)
+        assert data["error"]["code"] == "not_authenticated"
+        assert "Full Disk Access" in data["error"]["message"]
+
     def test_extraction_hint_for_macos_full_disk_access(self, monkeypatch):
         from boss_cli.auth import _diagnose_extraction_issues
 
@@ -1046,14 +1139,14 @@ def _resume_detail() -> dict:
 
 
 def _jev_answers() -> dict:
-    choice = {"type": "choice", "choice": "partial_match", "confidence": 0.7,
-              "probabilities": {"strong_match": 0.2, "partial_match": 0.7, "clear_gap": 0.05, "insufficient_evidence": 0.05}}
-    score = {"type": "score", "score": 2.6, "confidence": 0.5, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.1, "3": 0.5, "4": 0.2}}
+    def score() -> dict:
+        return {"type": "score", "score": 2.6, "confidence": 0.5, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.1, "3": 0.5, "4": 0.2}}
+
     return {
         "model": "jev-test",
         "answers": {
-            "skills": choice, "responsibilities": choice, "experience": choice,
-            "company_business": score, "preference_alignment": score, "overall": score,
+            "skills": score(), "responsibilities": score(), "experience": score(),
+            "company_business": score(), "preference_alignment": score(), "overall": score(),
             "screening_probability": {"type": "noul", "noul": 0.42},
         },
     }
@@ -1110,13 +1203,22 @@ class TestJevModule:
         assert result["model"] == "jev-test"
         assert result["assessment"]["overall"]["score"] == 2.6
         assert result["assessment"]["screening_probability"]["probability"] == 0.42
+        # Every fit dimension is a numeric 0–4 score so results are comparable across dimensions.
+        assert all(body["questions"][key]["type"] == "score" for key in ("skills", "responsibilities", "experience"))
+        assert result["assessment"]["skills"] == {
+            "score": 2.6,
+            "scale": "0–4（模型评分，不是百分比）",
+            "confidence": 0.5,
+            "probabilities": {"0": 0.1, "1": 0.1, "2": 0.1, "3": 0.5, "4": 0.2},
+        }
 
     @pytest.mark.parametrize("mutate", [
         lambda a: a["answers"].pop("overall"),
         lambda a: a["answers"]["overall"].update(score=4.5),
         lambda a: a["answers"]["overall"].update(score=True),
-        lambda a: a["answers"]["skills"].update(choice="maybe"),
-        lambda a: a["answers"]["skills"].update(type="score"),
+        lambda a: a["answers"]["skills"].update(score=-0.1),
+        lambda a: a["answers"]["skills"].update(type="choice"),
+        lambda a: a["answers"]["experience"].update(probabilities={"3": 1.2}),
         lambda a: a["answers"]["screening_probability"].update(noul=None),
         lambda a: a["answers"]["screening_probability"].update(noul=1.5),
         lambda a: a.update(answers=[]),
@@ -1336,13 +1438,13 @@ class TestFitCommand:
     def test_render_escapes_model_markup(self):
         from boss_cli.commands.fit import _render_fit
 
-        choice = {"label": "部分匹配", "confidence": None}
-        score = {"score": 2.0, "confidence": 0.5}
+        score = {"score": 2.0, "confidence": 0.5, "probabilities": {"2": 0.6, "3": 0.4}}
+        bare = {"score": 1.0, "confidence": None}
         data = {
             "job": {"title": "[bold]x", "company": "c", "salary": "s", "location": "l", "business_context_source": "src"},
             "model": "jev[/dim]evil",
             "assessment": {
-                "skills": choice, "responsibilities": choice, "experience": choice,
+                "skills": bare, "responsibilities": score, "experience": score,
                 "company_business": score, "preference_alignment": score, "overall": score,
                 "screening_probability": {"probability": 0.4},
             },
