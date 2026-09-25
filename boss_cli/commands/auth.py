@@ -6,8 +6,11 @@ import json
 import logging
 
 import click
+from rich.markup import escape
 from rich.panel import Panel
+from rich.table import Table
 
+from ..resume import normalize_resume
 from ._common import (
     console,
     handle_command,
@@ -187,10 +190,18 @@ def status(as_json: bool, as_yaml: bool) -> None:
 
 
 @click.command()
+@click.option("--basic", is_flag=True, help="只查看基本信息（不拉取在线简历详情）")
 @structured_output_options
-def me(as_json: bool, as_yaml: bool) -> None:
-    """查看个人资料和求职期望"""
+def me(basic: bool, as_json: bool, as_yaml: bool) -> None:
+    """查看个人资料和在线简历（工作/项目/教育经历、个人优势、求职期望）"""
     cred = require_auth()
+
+    def _action(client) -> dict:
+        if basic:
+            return client.get_resume_baseinfo()
+        detail = client.get_resume_detail()
+        base = detail.get("baseInfo") if isinstance(detail, dict) else None
+        return {**(base if isinstance(base, dict) else {}), "resume": normalize_resume(detail)}
 
     def _render(info: dict) -> None:
         name = info.get("name", info.get("nickName", "-"))
@@ -198,20 +209,74 @@ def me(as_json: bool, as_yaml: bool) -> None:
         degree = info.get("degreeCategory", "-")
         account = info.get("account", "-")
         gender = "男" if info.get("gender") == 1 else "女" if info.get("gender") == 2 else "-"
+        work_years = info.get("workYearDesc")
 
         panel = Panel(
-            f"[bold]{name}[/bold]  {gender}  {age}\n"
-            f"学历: {degree}\n"
-            f"账号: {account}",
+            f"[bold]{escape(str(name))}[/bold]  {gender}  {escape(str(age))}\n"
+            f"学历: {escape(str(degree))}" + (f"  ·  {escape(work_years)}" if work_years else "") + "\n"
+            f"账号: {escape(str(account))}",
             title="👤 个人资料",
             border_style="cyan",
         )
         console.print(panel)
+        if "resume" in info:
+            _render_resume(info["resume"])
 
     handle_command(
         cred,
-        action=lambda c: c.get_resume_baseinfo(),
+        action=_action,
         render=_render,
         as_json=as_json,
         as_yaml=as_yaml,
     )
+
+
+def _render_resume(resume: dict) -> None:
+    if not resume:
+        console.print("[yellow]⚠️  在线简历为空，请先在 BOSS直聘 完善简历[/yellow]")
+        return
+
+    def _block(title: str, body: str) -> None:
+        console.print(Panel(escape(body), title=title, border_style="blue", title_align="left"))
+
+    if resume.get("advantage"):
+        _block("💡 个人优势", resume["advantage"])
+    if resume.get("professional_skill"):
+        _block("🛠  专业技能", resume["professional_skill"])
+
+    if resume.get("expectations"):
+        table = Table(title="🎯 求职期望", show_lines=False)
+        for column in ("职位", "城市", "薪资", "行业"):
+            table.add_column(column)
+        for item in resume["expectations"]:
+            table.add_row(*(escape(item.get(key, "-")) for key in ("position", "city", "salary", "industry")))
+        console.print(table)
+
+    for item in resume.get("work_experience", []):
+        heading = "  ·  ".join(v for v in (item.get("company"), item.get("position"), item.get("period")) if v)
+        body = "\n\n".join(
+            f"{label}：{item[key]}"
+            for key, label in (("department", "部门"), ("skills", "技能标签"), ("content", "工作内容"), ("performance", "工作业绩"))
+            if item.get(key)
+        )
+        console.print(Panel(escape(body or "-"), title=f"💼 {escape(heading)}", border_style="green", title_align="left"))
+
+    for item in resume.get("project_experience", []):
+        heading = "  ·  ".join(v for v in (item.get("name"), item.get("role"), item.get("period")) if v)
+        body = "\n\n".join(
+            f"{label}：{item[key]}" for key, label in (("description", "项目描述"), ("performance", "项目业绩")) if item.get(key)
+        )
+        console.print(Panel(escape(body or "-"), title=f"📁 {escape(heading)}", border_style="magenta", title_align="left"))
+
+    if resume.get("education"):
+        table = Table(title="🎓 教育经历")
+        for column in ("学校", "专业", "学历", "时间"):
+            table.add_column(column)
+        for item in resume["education"]:
+            table.add_row(*(escape(item.get(key, "-")) for key in ("school", "major", "degree", "period")))
+        console.print(table)
+
+    if resume.get("certifications"):
+        console.print(f"📜 资格证书: {escape('、'.join(resume['certifications']))}")
+    if resume.get("last_update"):
+        console.print(f"[dim]简历更新时间: {escape(resume['last_update'])}[/dim]")

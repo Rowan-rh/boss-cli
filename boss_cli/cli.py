@@ -17,7 +17,7 @@ import logging
 import click
 
 from . import __version__
-from .commands import auth, personal, recruiter, search, social
+from .commands import auth, fit, personal, recruiter, search, social
 
 
 @click.group()
@@ -49,6 +49,7 @@ cli.add_command(search.show)
 cli.add_command(search.export)
 cli.add_command(search.history)
 cli.add_command(search.cities)
+cli.add_command(fit.fit)
 
 # ─── Personal Center commands ────────────────────────────────────────
 

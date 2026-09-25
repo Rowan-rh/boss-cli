@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import io
 import json
 from unittest.mock import MagicMock, patch
 
@@ -35,7 +36,7 @@ class TestCliBasic:
             "login", "status", "logout", "me",
             "search", "recommend", "cities", "detail", "show", "export", "history",
             "applied", "interviews",
-            "chat", "greet", "batch-greet",
+            "chat", "greet", "batch-greet", "fit",
         ]
         for cmd in expected:
             assert cmd in result.output, f"Command '{cmd}' not found in CLI help"
@@ -48,7 +49,7 @@ class TestCommandHelp:
         "login", "logout", "status", "me",
         "search", "recommend", "cities", "detail", "show", "export", "history",
         "applied", "interviews",
-        "chat", "greet", "batch-greet",
+        "chat", "greet", "batch-greet", "fit",
     ])
     def test_help(self, cmd: str):
         result = runner.invoke(cli, [cmd, "--help"])
@@ -208,7 +209,7 @@ class TestPersonalCommands:
         with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
              patch("boss_cli.commands._common.BossClient") as MockClient:
             mock_instance = MagicMock()
-            mock_instance.get_resume_baseinfo.return_value = mock_data
+            mock_instance.get_resume_detail.return_value = {**_resume_detail(), "baseInfo": mock_data}
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
             mock_instance.__exit__ = MagicMock(return_value=False)
             MockClient.return_value = mock_instance
@@ -227,7 +228,7 @@ class TestPersonalCommands:
         with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
              patch("boss_cli.commands._common.BossClient") as MockClient:
             mock_instance = MagicMock()
-            mock_instance.get_resume_baseinfo.return_value = mock_data
+            mock_instance.get_resume_detail.return_value = {"baseInfo": mock_data}
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
             mock_instance.__exit__ = MagicMock(return_value=False)
             MockClient.return_value = mock_instance
@@ -237,6 +238,66 @@ class TestPersonalCommands:
             data = json.loads(result.output)
             assert data["ok"] is True
             assert data["data"]["name"] == "张三"
+
+    def _me_client(self) -> MagicMock:
+        client = MagicMock()
+        client.__enter__ = MagicMock(return_value=client)
+        client.__exit__ = MagicMock(return_value=False)
+        client.get_resume_detail.return_value = _resume_detail()
+        client.get_resume_baseinfo.return_value = {"name": "张三"}
+        return client
+
+    def test_me_json_includes_online_resume(self):
+        client = self._me_client()
+        with patch("boss_cli.commands._common.get_credential", return_value=MagicMock()), \
+             patch("boss_cli.commands._common.BossClient", return_value=client):
+            result = runner.invoke(cli, ["me", "--json"])
+        assert result.exit_code == 0, result.output
+        data = json.loads(result.output)["data"]
+        assert data["name"] == "张三"
+        resume = data["resume"]
+        assert resume["work_years"] == "6年经验"
+        assert resume["work_experience"][0] == {
+            "company": "示例科技", "position": "后端工程师", "period": "2022.09 - 至今",
+            "content": "负责订单系统", "performance": "QPS 提升 3 倍",
+        }
+        assert resume["project_experience"][0]["name"] == "交易平台"
+        assert resume["education"][0] == {"school": "某大学", "major": "计算机", "degree": "本科", "period": "2016 - 2020"}
+        assert resume["expectations"] == [{"position": "Python", "city": "北京", "salary": "20-30K"}]
+        client.get_resume_baseinfo.assert_not_called()
+
+    def test_me_basic_skips_online_resume(self):
+        client = self._me_client()
+        with patch("boss_cli.commands._common.get_credential", return_value=MagicMock()), \
+             patch("boss_cli.commands._common.BossClient", return_value=client):
+            result = runner.invoke(cli, ["me", "--basic", "--json"])
+        assert result.exit_code == 0, result.output
+        assert json.loads(result.output)["data"] == {"name": "张三"}
+        client.get_resume_detail.assert_not_called()
+
+    def test_me_render_shows_resume_sections(self):
+        from rich.console import Console
+
+        from boss_cli.commands.auth import _render_resume
+        from boss_cli.resume import normalize_resume
+
+        recorder = Console(record=True, width=160, file=io.StringIO())
+        with patch("boss_cli.commands.auth.console", recorder):
+            _render_resume(normalize_resume(_resume_detail()))
+        rendered = recorder.export_text()
+        for text in ("个人优势", "示例科技", "交易平台", "某大学", "求职期望"):
+            assert text in rendered
+
+    def test_resume_text_excludes_identity(self):
+        from boss_cli.resume import normalize_resume, resume_to_text
+
+        text = resume_to_text(normalize_resume(_resume_detail()))
+        for expected in ("## 工作经历", "示例科技 | 后端工程师 | 2022.09 - 至今", "工作业绩：QPS 提升 3 倍", "## 项目经历"):
+            assert expected in text
+        for private in ("张三", "138****1234", "1998", "wx***"):
+            assert private not in text
+        assert normalize_resume(None) == {}
+        assert resume_to_text({}) == ""
 
     def test_applied_without_auth(self):
         with patch("boss_cli.commands._common.get_credential", return_value=None):
@@ -853,7 +914,7 @@ class TestSchemaEnvelope:
         with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
              patch("boss_cli.commands._common.BossClient") as MockClient:
             mock_instance = MagicMock()
-            mock_instance.get_resume_baseinfo.return_value = mock_data
+            mock_instance.get_resume_detail.return_value = {"baseInfo": mock_data}
             mock_instance.__enter__ = MagicMock(return_value=mock_instance)
             mock_instance.__exit__ = MagicMock(return_value=False)
             MockClient.return_value = mock_instance
@@ -951,3 +1012,331 @@ class TestCommandFailures:
             assert result.exit_code == 0
             assert "1/1" in result.output
             clear_credential.assert_not_called()
+
+
+# ── Job fit (TypeSafe Jev, mocked HTTP) ─────────────────────────────
+
+
+def _resume_detail() -> dict:
+    """Shape of /wapi/zpgeek/resume/geek/preview/data.json zpData (trimmed)."""
+    return {
+        "baseInfo": {"name": "张三", "age": "27岁", "gender": 1, "account": "138****1234", "birthday": "1998.01",
+                     "weixinBlur": "wx***", "degreeCategory": "本科", "workYearDesc": "6年经验"},
+        "userDesc": "熟悉高并发后端",
+        "professionalSkill": "Python, Go",
+        "lastUpdateTime": "2026.09.23 22:16",
+        "expectList": [{"id": 1, "positionName": "Python", "locationName": "北京", "salaryDesc": "20-30K", "location": 101010100}],
+        "workExpList": [{"id": 2, "companyName": "示例科技", "positionName": "后端工程师", "startDateStr": "2022.09",
+                         "endDate": "", "endDateStr": "至今", "workContent": "负责订单系统", "workPerformance": "QPS 提升 3 倍"}],
+        "projectExpList": [{"name": "交易平台", "roleName": "负责人", "startDateStr": "2023.01", "endDateStr": "2025.01",
+                            "projectDesc": "撮合引擎重构"}],
+        "educationExpList": [{"school": "某大学", "major": "计算机", "degreeName": "本科", "startYearStr": "2016", "endYearStr": "2020"}],
+        "certificationList": None,
+    }
+
+
+def _jev_answers() -> dict:
+    choice = {"type": "choice", "choice": "partial_match", "confidence": 0.7,
+              "probabilities": {"strong_match": 0.2, "partial_match": 0.7, "clear_gap": 0.05, "insufficient_evidence": 0.05}}
+    score = {"type": "score", "score": 2.6, "confidence": 0.5, "probabilities": {"0": 0.1, "1": 0.1, "2": 0.1, "3": 0.5, "4": 0.2}}
+    return {
+        "model": "jev-test",
+        "answers": {
+            "skills": choice, "responsibilities": choice, "experience": choice,
+            "company_business": score, "preference_alignment": score, "overall": score,
+            "screening_probability": {"type": "noul", "noul": 0.42},
+        },
+    }
+
+
+def _fit_client() -> MagicMock:
+    client = MagicMock()
+    client.__enter__ = MagicMock(return_value=client)
+    client.__exit__ = MagicMock(return_value=False)
+    client.get_job_detail.return_value = {
+        "jobInfo": {"jobName": "Python 工程师", "postDescription": "负责后端服务开发", "skills": ["Python"],
+                    "salaryDesc": "20-30K", "locationName": "北京"},
+        "brandComInfo": {"brandName": "示例科技", "industryName": "互联网"},
+    }
+    client.get_resume_baseinfo.return_value = {"name": "张三", "age": "25岁", "degreeCategory": "本科"}
+    client.get_resume_expect.return_value = {"expectList": [{"positionName": "Python", "expectCity": 101010100}]}
+    return client
+
+
+class TestJevModule:
+    """Unit tests for boss_cli.jev without network access."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self, monkeypatch):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+        monkeypatch.delenv("TYPESAFE_BASE_URL", raising=False)
+        monkeypatch.delenv("TYPESAFE_MODEL", raising=False)
+        monkeypatch.setattr("boss_cli.jev.time.sleep", lambda _s: None)
+
+    def _mock_http(self, monkeypatch, handler):
+        import httpx
+
+        real_client = httpx.Client
+        calls: list = []
+
+        def recording(request):
+            calls.append(request)
+            return handler(request)
+
+        monkeypatch.setattr("boss_cli.jev.httpx.Client", lambda **kw: real_client(transport=httpx.MockTransport(recording), **kw))
+        return calls
+
+    def test_success_parses_all_dimensions(self, monkeypatch):
+        import httpx
+
+        from boss_cli.jev import assess_job_fit
+
+        calls = self._mock_http(monkeypatch, lambda req: httpx.Response(200, json=_jev_answers()))
+        result = assess_job_fit({"candidate_resume": "x"})
+        assert str(calls[0].url) == "https://api.typesafe.ai/v1/systemone"
+        assert calls[0].headers["Authorization"] == "Bearer test-key"
+        body = json.loads(calls[0].content)
+        assert body["model"] == "jev-latest" and set(body["questions"]) == set(result["assessment"])
+        assert result["model"] == "jev-test"
+        assert result["assessment"]["overall"]["score"] == 2.6
+        assert result["assessment"]["screening_probability"]["probability"] == 0.42
+
+    @pytest.mark.parametrize("mutate", [
+        lambda a: a["answers"].pop("overall"),
+        lambda a: a["answers"]["overall"].update(score=4.5),
+        lambda a: a["answers"]["overall"].update(score=True),
+        lambda a: a["answers"]["skills"].update(choice="maybe"),
+        lambda a: a["answers"]["skills"].update(type="score"),
+        lambda a: a["answers"]["screening_probability"].update(noul=None),
+        lambda a: a["answers"]["screening_probability"].update(noul=1.5),
+        lambda a: a.update(answers=[]),
+    ])
+    def test_invalid_response_raises(self, monkeypatch, mutate):
+        import httpx
+
+        from boss_cli.jev import JevServiceError, assess_job_fit
+
+        payload = _jev_answers()
+        mutate(payload)
+        self._mock_http(monkeypatch, lambda req: httpx.Response(200, json=payload))
+        with pytest.raises(JevServiceError):
+            assess_job_fit({"candidate_resume": "x"})
+
+    def test_retries_529_once_then_succeeds(self, monkeypatch):
+        import httpx
+
+        from boss_cli.jev import assess_job_fit
+
+        responses = [httpx.Response(529), httpx.Response(200, json=_jev_answers())]
+        calls = self._mock_http(monkeypatch, lambda req: responses[len(calls) - 1])
+        assert assess_job_fit({"candidate_resume": "x"})["model"] == "jev-test"
+        assert len(calls) == 2
+
+    def test_429_gives_up_after_retry(self, monkeypatch):
+        import httpx
+
+        from boss_cli.jev import JevServiceError, assess_job_fit
+
+        calls = self._mock_http(monkeypatch, lambda req: httpx.Response(429))
+        with pytest.raises(JevServiceError, match="频率受限"):
+            assess_job_fit({"candidate_resume": "x"})
+        assert len(calls) == 2
+
+    def test_422_reports_field_path_but_not_values(self, monkeypatch):
+        import httpx
+
+        from boss_cli.jev import JevServiceError, assess_job_fit
+
+        body = {"detail": [{"loc": ["body", "questions", "overall", "criteria"], "input": "候选人简历原文 13812345678"}]}
+        self._mock_http(monkeypatch, lambda req: httpx.Response(422, json=body))
+        with pytest.raises(JevServiceError) as exc_info:
+            assess_job_fit({"candidate_resume": "x"})
+        message = str(exc_info.value)
+        assert "body.questions.overall.criteria" in message
+        assert "13812345678" not in message and "简历原文" not in message
+
+    def test_401_does_not_echo_key(self, monkeypatch):
+        import httpx
+
+        from boss_cli.jev import JevServiceError, assess_job_fit
+
+        self._mock_http(monkeypatch, lambda req: httpx.Response(401))
+        with pytest.raises(JevServiceError) as exc_info:
+            assess_job_fit({"candidate_resume": "x"})
+        assert "test-key" not in str(exc_info.value)
+
+    def test_timeout(self, monkeypatch):
+        import httpx
+
+        from boss_cli.jev import JevServiceError, assess_job_fit
+
+        def handler(req):
+            raise httpx.ReadTimeout("timeout", request=req)
+
+        self._mock_http(monkeypatch, handler)
+        with pytest.raises(JevServiceError, match="超时"):
+            assess_job_fit({"candidate_resume": "x"})
+
+    @pytest.mark.parametrize("base_url", [
+        "http://api.typesafe.ai", "https://user:pw@api.typesafe.ai", "https://api.typesafe.ai/v1", "https://api.typesafe.ai?x=1",
+    ])
+    def test_rejects_unsafe_base_url(self, monkeypatch, base_url):
+        from boss_cli.jev import JevServiceError, assess_job_fit
+
+        monkeypatch.setenv("TYPESAFE_BASE_URL", base_url)
+        with pytest.raises(JevServiceError, match="TYPESAFE_BASE_URL"):
+            assess_job_fit({"candidate_resume": "x"})
+
+    def test_state_size_limit(self, monkeypatch):
+        from boss_cli.jev import JevServiceError, assess_job_fit
+
+        with pytest.raises(JevServiceError, match="40 KB"):
+            assess_job_fit({"candidate_resume": "字" * 20_000})
+
+    def test_redact_contact_info(self):
+        from boss_cli.jev import redact_contact_info
+
+        text = (
+            "张三 电话 138-1234-5678 / +86 13912345678 邮箱 zs@example.com "
+            "身份证 11010519491231002X 微信：zhang_san88 QQ: 12345678 2019-2023 年负责 Python 服务，QPS 20000"
+        )
+        redacted, counts = redact_contact_info(text)
+        for secret in ("138-1234-5678", "13912345678", "zs@example.com", "11010519491231002X", "zhang_san88", "12345678 "):
+            assert secret not in redacted
+        assert counts == {"email": 1, "id_number": 1, "phone": 2, "messenger_id": 2}
+        assert "2019-2023" in redacted and "QPS 20000" in redacted
+
+
+class TestFitCommand:
+    """CLI tests for `boss fit` with mocked BOSS client and Jev call."""
+
+    @pytest.fixture(autouse=True)
+    def _env(self, monkeypatch):
+        monkeypatch.setenv("TYPESAFE_API_KEY", "test-key")
+
+    def _invoke(self, args, *, client=None, assess=None):
+        mock_cred = MagicMock()
+        mock_cred.cookies = {"wt2": "x"}
+        client = client or _fit_client()
+        assess = assess or MagicMock(return_value={"model": "jev-test", "assessment": {}})
+        with patch("boss_cli.commands._common.get_credential", return_value=mock_cred), \
+             patch("boss_cli.commands._common.BossClient", return_value=client), \
+             patch("boss_cli.commands.fit.assess_job_fit", assess):
+            return runner.invoke(cli, ["fit", *args]), client, assess
+
+    def test_requires_confirm_send(self, tmp_path):
+        resume = tmp_path / "resume.txt"
+        resume.write_text("Python 开发 5 年", encoding="utf-8")
+        result, client, assess = self._invoke(["abc", "--resume-file", str(resume)])
+        assert result.exit_code == 2
+        assert "--confirm-send" in result.output
+        client.get_job_detail.assert_not_called()
+        assess.assert_not_called()
+
+    def test_requires_api_key(self, tmp_path, monkeypatch):
+        monkeypatch.delenv("TYPESAFE_API_KEY")
+        resume = tmp_path / "resume.txt"
+        resume.write_text("Python", encoding="utf-8")
+        result, _, assess = self._invoke(["abc", "--resume-file", str(resume), "--confirm-send"])
+        assert result.exit_code == 1
+        assert "TYPESAFE_API_KEY" in result.output
+        assess.assert_not_called()
+
+    @pytest.mark.parametrize("content", [b"", b"\xff\xfe\x00bad", "字".encode() * 14_000])
+    def test_rejects_bad_resume_file(self, tmp_path, content):
+        resume = tmp_path / "resume.txt"
+        resume.write_bytes(content)
+        result, client, assess = self._invoke(["abc", "--resume-file", str(resume), "--confirm-send"])
+        assert result.exit_code == 1
+        client.get_job_detail.assert_not_called()
+        assess.assert_not_called()
+
+    def test_combined_size_checked_before_boss_requests(self, tmp_path):
+        resume = tmp_path / "resume.txt"
+        company = tmp_path / "company.txt"
+        resume.write_text("字" * 8_000, encoding="utf-8")
+        company.write_text("业" * 8_000, encoding="utf-8")
+        result, client, _ = self._invoke(
+            ["abc", "--resume-file", str(resume), "--company-context-file", str(company), "--confirm-send"]
+        )
+        assert result.exit_code == 1
+        assert "40 KB" in result.output
+        client.get_job_detail.assert_not_called()
+
+    def test_sends_minimized_state_and_json_omits_resume(self, tmp_path):
+        resume = tmp_path / "resume.txt"
+        resume.write_text("Python 开发 5 年，电话 13812345678，邮箱 me@example.com", encoding="utf-8")
+        result, _, assess = self._invoke(["abc", "--resume-file", str(resume), "--confirm-send", "--json"])
+        assert result.exit_code == 0, result.output
+
+        state = assess.call_args.args[0]
+        assert "13812345678" not in state["candidate_resume"]
+        assert "me@example.com" not in state["candidate_resume"]
+        profile = state["candidate_profile_and_preferences"]
+        assert profile == {"education": "本科", "desired_positions": "Python"}
+        assert "张三" not in json.dumps(state, ensure_ascii=False)
+        assert state["job_requirements"]["description"] == "负责后端服务开发"
+
+        data = json.loads(result.output)
+        assert data["ok"] is True
+        assert "Python 开发 5 年" not in result.output
+        summary = data["data"]["input_summary"]
+        assert summary["resume_redactions"] == {"email": 1, "phone": 1}
+        assert set(summary["profile_fields_missing"]) == {"work_experience", "desired_cities", "desired_salary"}
+
+    def test_uses_online_resume_without_resume_file(self):
+        client = _fit_client()
+        detail = _resume_detail()
+        detail["userDesc"] = "熟悉高并发后端，联系 me@example.com"
+        client.get_resume_detail.return_value = detail
+        result, _, assess = self._invoke(["abc", "--confirm-send", "--json"], client=client)
+        assert result.exit_code == 0, result.output
+
+        state = assess.call_args.args[0]
+        assert "撮合引擎重构" in state["candidate_resume"]
+        assert "me@example.com" not in state["candidate_resume"]
+        assert "张三" not in json.dumps(state, ensure_ascii=False)
+        assert state["candidate_profile_and_preferences"] == {
+            "education": "本科", "work_experience": "6年经验", "desired_positions": "Python",
+            "desired_cities": "北京", "desired_salary": "20-30K",
+        }
+        client.get_resume_baseinfo.assert_not_called()
+        summary = json.loads(result.output)["data"]["input_summary"]
+        assert summary["resume_source"] == "boss_online_resume"
+        assert summary["resume_redactions"] == {"email": 1}
+
+    def test_empty_online_resume_skips_jev(self):
+        client = _fit_client()
+        client.get_resume_detail.return_value = {"baseInfo": {"name": "张三"}}
+        result, _, assess = self._invoke(["abc", "--confirm-send", "--json"], client=client)
+        assert result.exit_code == 1
+        assert "在线简历为空" in result.output
+        assess.assert_not_called()
+
+    def test_missing_job_description_skips_jev(self, tmp_path):
+        resume = tmp_path / "resume.txt"
+        resume.write_text("Python", encoding="utf-8")
+        client = _fit_client()
+        client.get_job_detail.return_value = {"jobInfo": {"jobName": "x"}, "brandComInfo": None}
+        result, _, assess = self._invoke(["abc", "--resume-file", str(resume), "--confirm-send", "--json"], client=client)
+        assert result.exit_code == 1
+        assert json.loads(result.output)["error"]["code"] == "api_error"
+        assess.assert_not_called()
+
+    def test_render_escapes_model_markup(self):
+        from boss_cli.commands.fit import _render_fit
+
+        choice = {"label": "部分匹配", "confidence": None}
+        score = {"score": 2.0, "confidence": 0.5}
+        data = {
+            "job": {"title": "[bold]x", "company": "c", "salary": "s", "location": "l", "business_context_source": "src"},
+            "model": "jev[/dim]evil",
+            "assessment": {
+                "skills": choice, "responsibilities": choice, "experience": choice,
+                "company_business": score, "preference_alignment": score, "overall": score,
+                "screening_probability": {"probability": 0.4},
+            },
+            "input_summary": {"profile_fields_missing": ["desired_cities"], "resume_redactions": {"phone": 1}},
+            "notice": "n",
+        }
+        _render_fit(data)  # must not raise rich.errors.MarkupError
