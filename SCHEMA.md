@@ -25,7 +25,7 @@ Commands with `--json` / `--yaml` print exactly one envelope to **stdout**. Rich
   "data": null,
   "error": {
     "code": "not_authenticated",
-    "message": "环境异常 (__zp_stoken__ 已过期)。请重新登录: boss logout && boss login"
+    "message": "环境异常 (__zp_stoken__ 已过期，且无法从浏览器刷新)。请在浏览器中打开 zhipin.com 确认已登录，再执行 boss login（…）"
   }
 }
 ```
@@ -36,7 +36,7 @@ Branch on `ok` and `error.code`. `error.message` is human-readable Chinese text 
 
 | Code | Description | Suggested agent action |
 |------|-------------|------------------------|
-| `not_authenticated` | Session expired or not logged in (BOSS code 37) | Ask the user to log in to zhipin.com in a browser, then `boss logout && boss login` |
+| `not_authenticated` | `__zp_stoken__` expired and could not be refreshed from the browser, or not logged in (BOSS code 37). The saved credential is kept, so endpoints that do not need `__zp_stoken__` (e.g. `boss me`) keep working | Ask the user to log in to zhipin.com in a browser, then `boss logout && boss login` |
 | `rate_limited` | Too many requests (BOSS code 9); the client already cooled down and retried once | Stop and wait several minutes; do not retry in a loop |
 | `invalid_params` | Missing or invalid parameters (BOSS code 17/19) | Fix the arguments |
 | `api_error` | Any other upstream or service error — e.g. `当前登录状态已失效 (code=7)`, security block (code 121/122), empty online resume, TypeSafe Jev failure | Show `error.message` to the user |
@@ -65,7 +65,7 @@ An agent should treat "exit ≠ 0 and empty stdout" as a local precondition fail
 
 | Command | Output |
 |---------|--------|
-| `boss status --json` | Bare object, no envelope: `{"authenticated", "credential_present", "cookie_count", "cookies", "search_authenticated", "recommend_authenticated", "reason"}` (only `authenticated` and `credential_present` when no credential exists). `cookies` lists names only, never values. |
+| `boss status --json` | Bare object, no envelope: `{"authenticated", "credential_present", "cookie_count", "cookies", "search_authenticated", "recommend_authenticated", "detail_authenticated", "reason"}`. `authenticated` requires search and job detail to pass; `detail_authenticated` is `null` when no recommended job was available to probe (only `authenticated` and `credential_present` when no credential exists). `cookies` lists names only, never values. |
 | `boss export` | CSV or JSON rows written to `-o` or stdout (`--format csv\|json`) |
 | `boss recruiter export`, `boss recruiter resume-download` | Files written to disk |
 | `boss login`, `boss logout`, `boss cities`, `boss batch-greet`, `boss recruiter batch-view`, `boss recruiter job-close`, `boss recruiter job-reopen` | Rich output only |
@@ -102,9 +102,9 @@ Empty fields and empty sections are omitted. `boss me --basic --json` returns on
   "job": { "security_id": "…", "title": "…", "company": "…", "salary": "…", "location": "…", "business_context_source": "…" },
   "model": "jev-latest",
   "assessment": {
-    "skills":           { "choice": "partial_match", "label": "部分匹配", "confidence": 0.7, "probabilities": { … } },
-    "responsibilities": { "choice": "…", "label": "…", "confidence": 0.0, "probabilities": { … } },
-    "experience":       { "choice": "…", "label": "…", "confidence": 0.0, "probabilities": { … } },
+    "skills":               { "score": 3.0, "scale": "0–4（模型评分，不是百分比）", "confidence": 0.5, "probabilities": { "0": 0.0, "1": 0.0, "2": 0.2, "3": 0.6, "4": 0.2 } },
+    "responsibilities":     { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
+    "experience":           { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
     "company_business":     { "score": 2.6, "scale": "0–4（模型评分，不是百分比）", "confidence": 0.5, "probabilities": { … } },
     "preference_alignment": { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
     "overall":              { "score": 0.0, "scale": "…", "confidence": 0.0, "probabilities": { … } },
@@ -120,7 +120,6 @@ Empty fields and empty sections are omitted. `boss me --basic --json` returns on
 }
 ```
 
-- `choice` ∈ `strong_match`, `partial_match`, `clear_gap`, `insufficient_evidence`.
-- Scores are 0–4, not percentages. `confidence` and `probabilities` may be `null`.
+- All six dimensions are Jev 0–4 scores (not percentages); `probabilities` maps each level `"0"`–`"4"` to its probability. `confidence` and `probabilities` may be `null`.
 - `resume_source` is `boss_online_resume` (default) or `file` (`--resume-file`).
 - The resume text itself is never echoed in the output.

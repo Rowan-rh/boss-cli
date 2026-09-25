@@ -3,7 +3,7 @@
 Strategy:
 1. Try loading saved credential from ~/.config/boss-cli/credential.json
 2. Try extracting cookies from local browsers via browser-cookie3
-3. Fallback: QR code login in terminal
+3. QR code login in terminal, only when explicitly requested (boss login --qrcode)
 """
 
 from __future__ import annotations
@@ -159,12 +159,26 @@ _KEYCHAIN_ERROR_KEYWORDS = (
 )
 
 
+# macOS privacy protection (TCC) denies reading another app's data without Full Disk Access.
+_FILE_ACCESS_ERROR_KEYWORDS = (
+    "unable to read database file",
+    "operation not permitted",
+)
+
+
 def _diagnose_extraction_issues(diagnostics: list[str]) -> str | None:
     """Analyse extraction diagnostics for platform-specific issues.
 
     Returns a user-friendly hint string, or None.
     """
     lowered = " ".join(diagnostics).lower()
+    if sys.platform == "darwin" and any(kw in lowered for kw in _FILE_ACCESS_ERROR_KEYWORDS):
+        return (
+            "macOS blocked access to the browser's cookie database — your terminal lacks Full Disk Access.\n"
+            "  Fix: System Settings → Privacy & Security → Full Disk Access → enable your terminal app,\n"
+            "  fully quit and reopen the terminal, then run boss login again.\n"
+            "  QR login cannot obtain __zp_stoken__, so search/recommend may still fail without this."
+        )
     if not any(kw in lowered for kw in _KEYCHAIN_ERROR_KEYWORDS):
         return None
 
@@ -196,6 +210,22 @@ def _diagnose_extraction_issues(diagnostics: list[str]) -> str | None:
         "System keyring access failed — the cookie encryption key could not be retrieved.\n"
         "  If running headless or via SSH, ensure your keyring daemon is unlocked."
     )
+
+
+def browser_extraction_failure_reason(diagnostics: list[str]) -> str:
+    """Explain, in user-facing Chinese, why no usable credential came out of the browsers."""
+    hint = _diagnose_extraction_issues(diagnostics)
+    if hint:
+        return f"无法读取浏览器 Cookie（需要你处理）：\n  {hint}"
+    lowered = " ".join(diagnostics).lower()
+    if "missing required cookies" in lowered:
+        return (
+            "浏览器中的 zhipin.com Cookie 不完整（缺少 __zp_stoken__ 等关键项）。"
+            "请在浏览器中重新登录 zhipin.com，打开任意职位详情页确认可正常访问后再重试。"
+        )
+    if "browser-cookie3 not installed" in lowered:
+        return "未安装 browser-cookie3，无法读取浏览器 Cookie。请重新安装 kabi-boss-cli。"
+    return "未在浏览器中找到 zhipin.com 登录 Cookie。请先在浏览器中登录 zhipin.com 后再重试。"
 
 
 # ── Environment variable fallback ───────────────────────────────────
@@ -570,6 +600,7 @@ def extract_browser_credential(cookie_source: str | None = None) -> tuple[Creden
                 "In-process cookies missing required keys: %s",
                 ", ".join(cred.missing_required_cookies),
             )
+            all_diagnostics.append(f"in-process: missing required cookies: {', '.join(cred.missing_required_cookies)}")
         else:
             save_credential(cred)
             return cred, all_diagnostics
@@ -584,6 +615,7 @@ def extract_browser_credential(cookie_source: str | None = None) -> tuple[Creden
                 "Subprocess cookies missing required keys: %s",
                 ", ".join(cred.missing_required_cookies),
             )
+            all_diagnostics.append(f"subprocess: missing required cookies: {', '.join(cred.missing_required_cookies)}")
         else:
             save_credential(cred)
             return cred, all_diagnostics
@@ -849,7 +881,7 @@ async def qr_login() -> Credential:
                 break
 
         if not scanned:
-            raise RuntimeError("二维码已过期，请重试 (boss login)")
+            raise RuntimeError("二维码已过期，请重试 (boss login --qrcode)")
 
         # Step 4: Wait for confirm
         confirmed = False
@@ -859,7 +891,7 @@ async def qr_login() -> Credential:
                 break
 
         if not confirmed:
-            raise RuntimeError("确认超时，请重试 (boss login)")
+            raise RuntimeError("确认超时，请重试 (boss login --qrcode)")
 
         # Step 5: Dispatch
         credential = await _dispatch_login(client, qr_id)
@@ -909,6 +941,7 @@ def verify_credential_details(credential: Credential, *, force_refresh: bool = F
             "authenticated": False,
             "search_authenticated": False,
             "recommend_authenticated": False,
+            "detail_authenticated": False,
             "reason": f"缺少关键 Cookie: {missing}",
         }
 
@@ -925,6 +958,7 @@ def verify_credential_details(credential: Credential, *, force_refresh: bool = F
     checks = {
         "search_authenticated": False,
         "recommend_authenticated": False,
+        "detail_authenticated": False,
     }
     failures: list[str] = []
 
@@ -937,15 +971,33 @@ def verify_credential_details(credential: Credential, *, force_refresh: bool = F
         except BossApiError as exc:
             failures.append(f"search: 登录态校验失败: {exc}")
 
+        security_id = ""
         try:
-            client.get_recommend_jobs(page=1)
+            recommend = client.get_recommend_jobs(page=1)
             checks["recommend_authenticated"] = True
+            jobs = recommend.get("jobList") if isinstance(recommend, dict) else None
+            first = jobs[0] if isinstance(jobs, list) and jobs else None
+            security_id = first.get("securityId", "") if isinstance(first, dict) else ""
         except SessionExpiredError as exc:
             failures.append(f"recommend: {exc}")
         except BossApiError as exc:
             failures.append(f"recommend: 登录态校验失败: {exc}")
 
-    authenticated = checks["search_authenticated"]
+        # Job detail enforces __zp_stoken__ even when search/recommend still pass,
+        # so probe it to avoid reporting a half-working session as logged in.
+        if security_id:
+            try:
+                client.get_job_detail(security_id=security_id)
+                checks["detail_authenticated"] = True
+            except SessionExpiredError as exc:
+                failures.append(f"detail: {exc}")
+            except BossApiError as exc:
+                failures.append(f"detail: 登录态校验失败: {exc}")
+        else:
+            checks["detail_authenticated"] = None
+            failures.append("detail: 推荐列表为空，未能校验职位详情接口")
+
+    authenticated = checks["search_authenticated"] and checks["detail_authenticated"] is not False
     result: dict[str, Any] = {
         "authenticated": authenticated,
         **checks,

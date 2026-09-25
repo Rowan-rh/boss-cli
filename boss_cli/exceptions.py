@@ -16,11 +16,15 @@ class BossApiError(Exception):
 class SessionExpiredError(BossApiError):
     """Raised when __zp_stoken__ has expired (code=37)."""
 
-    def __init__(self):
-        super().__init__(
-            "环境异常 (__zp_stoken__ 已过期)。请重新登录: boss logout && boss login",
-            code=37,
+    def __init__(self, detail: str | None = None):
+        message = (
+            "环境异常 (__zp_stoken__ 已过期，且无法从浏览器刷新)。"
+            "请在浏览器中打开 zhipin.com 确认已登录，再执行 boss login"
+            "（macOS 需为终端开启「完全磁盘访问权限」，扫码登录无法获取 __zp_stoken__）"
         )
+        if detail:
+            message = f"{message}\n{detail}"
+        super().__init__(message, code=37)
 
 
 class AuthRequiredError(BossApiError):
